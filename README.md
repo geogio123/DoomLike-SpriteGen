@@ -14,7 +14,7 @@ It utilizes **Blender** in the background to render the model and **Pillow (PIL)
 ##  Features
 
 *   **8-Directional Rendering:** Automatically renders the model from Front, Front-Right, Right, Back-Right, Back, Back-Left, Left, and Front-Left.
-*   **Format Support:** Supports `.obj`, `.fbx`, `.gltf`, and `.glb` 3D models.
+*   **Format Support:** Supports `.obj(recommended)`, `.fbx`, `.gltf`, and `.glb` 3D models.
 *   **Automatic Pixelation:** Renders at high resolution and downscales using Nearest Neighbor interpolation for a crisp, retro look.
 *   **Smart Alignment:** Calculates the maximum bounding box across all 8 frames and crops them uniformly to ensure the sprite doesn't "jitter" when animating or rotating in-game.
 *   **Texture Support:** Optional ability to override the model's texture with an external image file.
