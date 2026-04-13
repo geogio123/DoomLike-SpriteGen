@@ -94,11 +94,6 @@ for obj in bpy.context.scene.objects:
     # This preserves the model's default/intended pose
     if obj.type == 'ARMATURE':
         print(f"Found armature {obj.name} - keeping current pose")
-        # Don't change pose_position - keep whatever pose the model has
-
-# Note: We are NOT applying armature modifiers anymore
-# This preserves the model's intended pose (e.g., hands in correct position)
-# while still preventing animations from interfering with the render
 
 # Deselect all and reselect mesh objects for joining
 bpy.ops.object.select_all(action='DESELECT')
