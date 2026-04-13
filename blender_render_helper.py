@@ -23,6 +23,16 @@ rotX = float(argv[5])
 rotY = float(argv[6])
 rotZ = float(argv[7]) if len(argv) > 7 else 0.0
 camAngle = float(argv[8]) if len(argv) > 8 else 90.0
+unlit_color_hex = argv[9] if len(argv) > 9 and argv[9] != "None" else ""
+flip_fb = argv[10] == 'True' if len(argv) > 10 else False
+flip_lr = argv[11] == 'True' if len(argv) > 11 else False
+
+def hex_to_rgb(hex_str):
+    hex_str = hex_str.lstrip('#')
+    if len(hex_str) != 6:
+        return (0.0, 0.0, 0.0, 1.0)
+    # Convert sRGB to linear for Blender rendering
+    return tuple((int(hex_str[i:i+2], 16)/255.0)**2.2 for i in (0, 2, 4)) + (1.0,)
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 os.makedirs(out_dir, exist_ok=True)
@@ -144,6 +154,12 @@ if texture_path:
     if img:
         tex_node.image = img
         mat.node_tree.links.new(tex_node.outputs['Color'], bsdf.inputs['Base Color'])
+        # Connect alpha for transparency
+        mat.node_tree.links.new(tex_node.outputs['Alpha'], bsdf.inputs['Alpha'])
+    
+    # Setup EEVEE transparency modes for the new material
+    mat.blend_method = 'CLIP'
+    mat.shadow_method = 'CLIP'
     
     # Apply material to all mesh children
     for obj in all_imported_objs:
@@ -152,6 +168,71 @@ if texture_path:
                 obj.data.materials[0] = mat
             else:
                 obj.data.materials.append(mat)
+else:
+    # If no texture override, ensure existing materials on the model account for transparency
+    # Many importers default to 'OPAQUE' even if textures have alpha
+    for obj in all_imported_objs:
+        if obj.type == 'MESH':
+            for m in obj.data.materials:
+                if m:
+                    m.blend_method = 'CLIP'
+                    m.shadow_method = 'CLIP'
+
+if unlit_color_hex:
+    unlit_rgb = hex_to_rgb(unlit_color_hex)
+    for obj in all_imported_objs:
+        if obj.type == 'MESH':
+            for m in obj.data.materials:
+                if m and m.use_nodes:
+                    if m.node_tree.nodes.get('UnlitMix'):
+                        continue
+                    bsdf = m.node_tree.nodes.get('Principled BSDF')
+                    if bsdf:
+                        color_link = None
+                        for link in m.node_tree.links:
+                            if link.to_node == bsdf and link.to_socket.name == 'Base Color':
+                                color_link = link
+                                break
+                        
+                        color_source_socket = None
+                        if color_link:
+                            color_source_socket = color_link.from_socket
+                        else:
+                            rgb_val = bsdf.inputs['Base Color'].default_value
+                            rgb_node = m.node_tree.nodes.new('ShaderNodeRGB')
+                            rgb_node.outputs[0].default_value = rgb_val
+                            color_source_socket = rgb_node.outputs[0]
+
+                        if color_source_socket:
+                            emission = m.node_tree.nodes.new('ShaderNodeEmission')
+                            emission.name = 'UnlitEmission'
+                            m.node_tree.links.new(color_source_socket, emission.inputs['Color'])
+                            
+                            dist = m.node_tree.nodes.new('ShaderNodeVectorMath')
+                            dist.operation = 'DISTANCE'
+                            dist.inputs[1].default_value = (unlit_rgb[0], unlit_rgb[1], unlit_rgb[2])
+                            m.node_tree.links.new(color_source_socket, dist.inputs[0])
+                            
+                            compare = m.node_tree.nodes.new('ShaderNodeMath')
+                            compare.operation = 'LESS_THAN'
+                            compare.inputs[1].default_value = 0.05
+                            m.node_tree.links.new(dist.outputs['Value'], compare.inputs[0])
+                            
+                            mix = m.node_tree.nodes.new('ShaderNodeMixShader')
+                            mix.name = 'UnlitMix'
+                            
+                            output_node = None
+                            for link in m.node_tree.links:
+                                if link.from_node == bsdf:
+                                    output_node = link.to_node
+                                    break
+                                    
+                            if output_node:
+                                m.node_tree.links.new(compare.outputs['Value'], mix.inputs['Fac'])
+                                m.node_tree.links.new(bsdf.outputs['BSDF'], mix.inputs[1])
+                                m.node_tree.links.new(emission.outputs['Emission'], mix.inputs[2])
+                                m.node_tree.links.new(mix.outputs['Shader'], output_node.inputs['Surface'])
+
 
 cam_data = bpy.data.cameras.new('SpriteCam')
 cam_data.type = 'ORTHO'
@@ -214,12 +295,27 @@ DIRECTIONS = [
 ]
 
 for name, ang in DIRECTIONS:
+    # Handle name flipping to reverse views
+    out_name = name
+    if flip_fb:
+        if 'front' in out_name:
+            out_name = out_name.replace('front', 'TMP_BACK')
+        elif 'back' in out_name:
+            out_name = out_name.replace('back', 'front')
+        out_name = out_name.replace('TMP_BACK', 'back')
+    if flip_lr:
+        if 'left' in out_name:
+            out_name = out_name.replace('left', 'TMP_RIGHT')
+        elif 'right' in out_name:
+            out_name = out_name.replace('right', 'left')
+        out_name = out_name.replace('TMP_RIGHT', 'right')
+
     # Apply full rotation: user corrections (X, Y) + direction angle (Z)
     rotation = (math.radians(rotX), math.radians(rotY), math.radians(ang + rotZ))
     root.rotation_euler = rotation
     bpy.context.view_layer.update()
-    print(f"Rendering {name}: rotation = ({rotX}°, {rotY}°, {ang + rotZ}°)")
-    fname = os.path.join(out_dir, f"{base_name}_{name}.png")
+    print(f"Rendering {name} (saved as {out_name}): rotation = ({rotX}°, {rotY}°, {ang + rotZ}°)")
+    fname = os.path.join(out_dir, f"{base_name}_{out_name}.png")
     scene.render.filepath = bpy.path.abspath(fname)
     bpy.ops.render.render(write_still=True)
     print('Wrote', fname)
