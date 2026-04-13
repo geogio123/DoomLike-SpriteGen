@@ -13,8 +13,8 @@ class SpriteGUI(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle('DOOMlike Sprite Generator')
-        self.setMinimumSize(750, 950)
-        self.resize(800, 1080)
+        self.setMinimumSize(450, 600)
+        self.resize(500, 700)
         self.setStyleSheet('''
             QWidget {
                 background-color: #1a1a1a;
@@ -179,6 +179,19 @@ class SpriteGUI(QtWidgets.QWidget):
         
         self.camAngle = QtWidgets.QLineEdit('90')
         form.addRow('Camera angle:', self.camAngle)
+
+        opts_label = QtWidgets.QLabel('Extra Options')
+        opts_label.setObjectName('sectionLabel')
+        form.addRow('', opts_label)
+
+        self.unlit_color = QtWidgets.QLineEdit('')
+        self.unlit_color.setPlaceholderText('e.g. #ff0000 (leaves color unshaded)')
+        form.addRow('Unlit Color (Hex):', self.unlit_color)
+
+        self.flip_fb = QtWidgets.QCheckBox('Flip Front and Back')
+        self.flip_lr = QtWidgets.QCheckBox('Flip Left and Right')
+        form.addRow('', self.flip_fb)
+        form.addRow('', self.flip_lr)
         
         settings_group.setLayout(form)
         main_layout.addWidget(settings_group)
@@ -219,7 +232,18 @@ class SpriteGUI(QtWidgets.QWidget):
         self.log.setFixedHeight(120)
         main_layout.addWidget(self.log)
 
-        self.setLayout(main_layout)
+        container = QtWidgets.QWidget()
+        container.setLayout(main_layout)
+
+        scroll_area = QtWidgets.QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(container)
+        scroll_area.setFrameShape(QtWidgets.QFrame.NoFrame)
+
+        outer_layout = QtWidgets.QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.addWidget(scroll_area)
+
         self.model_path = None
         self.texture_path = None
 
@@ -276,6 +300,12 @@ class SpriteGUI(QtWidgets.QWidget):
             rotZ = float(self.rotZ.text().strip())
             camAngle = float(self.camAngle.text().strip())
             pixel_size = int(self.pixel_size.text().strip())
+            
+            unlit = self.unlit_color.text().strip()
+            if not unlit:
+                unlit = "None"
+            flip_fb = str(self.flip_fb.isChecked())
+            flip_lr = str(self.flip_lr.isChecked())
         except Exception:
             QtWidgets.QMessageBox.warning(self, 'Error', 'Rotation, camera angle, and sizes must be numeric.')
             return
@@ -286,11 +316,11 @@ class SpriteGUI(QtWidgets.QWidget):
         self.log.clear()
         
         # Run generation in a separate thread
-        thread = threading.Thread(target=self._run_generation, args=(blender, base, img_size, rotX, rotY, rotZ, camAngle, pixel_size))
+        thread = threading.Thread(target=self._run_generation, args=(blender, base, img_size, rotX, rotY, rotZ, camAngle, pixel_size, unlit, flip_fb, flip_lr))
         thread.daemon = True
         thread.start()
 
-    def _run_generation(self, blender, base, img_size, rotX, rotY, rotZ, camAngle, pixel_size):
+    def _run_generation(self, blender, base, img_size, rotX, rotY, rotZ, camAngle, pixel_size, unlit, flip_fb, flip_lr):
         try:
             out_dir = os.path.join(os.getcwd(), 'output_sprites')
             os.makedirs(out_dir, exist_ok=True)
@@ -307,7 +337,7 @@ class SpriteGUI(QtWidgets.QWidget):
                  raise FileNotFoundError(f"Helper script not found at {script_path}")
 
             tex_arg = self.texture_path if self.texture_path else ''
-            args = [blender, '-b', '--python', script_path, '--', self.model_path, tex_arg, out_dir, base, str(img_size), str(rotX), str(rotY), str(rotZ), str(camAngle)]
+            args = [blender, '-b', '--python', script_path, '--', self.model_path, tex_arg, out_dir, base, str(img_size), str(rotX), str(rotY), str(rotZ), str(camAngle), unlit, flip_fb, flip_lr]
             
             QtCore.QMetaObject.invokeMethod(self, "append_log", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, 'Starting Blender render...'))
             QtCore.QMetaObject.invokeMethod(self, "append_log", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, 'Command: ' + ' '.join(args)))
@@ -354,21 +384,22 @@ class SpriteGUI(QtWidgets.QWidget):
                     img_path = os.path.join(out_dir, file)
                     img = Image.open(img_path).convert('RGBA')
                     
+                    # Create a new image with the maximum dimensions (transparent)
+                    final_img = Image.new('RGBA', max_bbox, (0, 0, 0, 0))
+                    
                     # Get bounding box and crop
                     bbox = img.getbbox()
                     if bbox:
                         cropped = img.crop(bbox)
                         
-                        # Create a new image with the maximum dimensions
-                        final_img = Image.new('RGBA', max_bbox, (0, 0, 0, 0))
-                        
                         # Center the cropped sprite in the final image
                         x_offset = (max_bbox[0] - cropped.width) // 2
                         y_offset = (max_bbox[1] - cropped.height) // 2
-                        final_img.paste(cropped, (x_offset, y_offset))
-                        
-                        final_img.save(img_path, optimize=False)
-                        QtCore.QMetaObject.invokeMethod(self, "append_log", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, f'  Processed: {file}'))
+                        # Use the sprite itself as a mask to correctly preserve transparency during paste
+                        final_img.paste(cropped, (x_offset, y_offset), cropped)
+                    
+                    final_img.save(img_path, optimize=False)
+                    QtCore.QMetaObject.invokeMethod(self, "append_log", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, f'  Processed: {file}'))
 
             QtCore.QMetaObject.invokeMethod(self, "append_log", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, f'Complete! Sprites saved to: {out_dir}'))
             QtCore.QMetaObject.invokeMethod(self, "show_success", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, out_dir))
